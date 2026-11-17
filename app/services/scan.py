@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 import sqlite3
 
+from app.services.locks import STORAGE_WRITE_LOCK
 from app.services.policies import get_active_policy
 
 
@@ -12,55 +13,57 @@ def _parse_day(value: str) -> date:
 def run_expire_scan(conn: sqlite3.Connection, as_of_date: str) -> dict:
     """扫描在线分区：超过策略保留天数则生成待执行裁决。"""
     as_of = _parse_day(as_of_date)
-    cur = conn.execute(
-        "INSERT INTO scan_jobs (as_of_date, status, message) VALUES (?,?,?)",
-        (as_of_date, "进行中", ""),
-    )
-    job_id = int(cur.lastrowid)
-    expired = 0
-
-    online = conn.execute(
-        "SELECT id, domain_code, biz_date, storage_state FROM partitions "
-        "WHERE storage_state = '在线'"
-    ).fetchall()
-
-    for part in online:
-        policy = get_active_policy(conn, part["domain_code"])
-        if not policy:
-            continue
-        age = (as_of - _parse_day(part["biz_date"])).days
-        if age < int(policy["keep_days"]):
-            continue
-        # 同一分区若已有未完成裁决，不再重复开单（预留后续题：重裁/作废重开）
-        exists = conn.execute(
-            "SELECT id FROM judgments WHERE partition_id = ? "
-            "AND status IN ('待执行','执行中')",
-            (part["id"],),
-        ).fetchone()
-        if exists:
-            continue
-        conn.execute(
-            "INSERT INTO judgments "
-            "(scan_job_id, partition_id, domain_code, biz_date, policy_version, "
-            "keep_days, decided_action, status) "
-            "VALUES (?,?,?,?,?,?,?, '待执行')",
-            (
-                job_id,
-                part["id"],
-                part["domain_code"],
-                part["biz_date"],
-                policy["version"],
-                policy["keep_days"],
-                policy["action_on_expire"],
-            ),
+    with STORAGE_WRITE_LOCK:
+        cur = conn.execute(
+            "INSERT INTO scan_jobs (as_of_date, status, message) VALUES (?,?,?)",
+            (as_of_date, "进行中", ""),
         )
-        expired += 1
+        job_id = int(cur.lastrowid)
+        expired = 0
 
-    conn.execute(
-        "UPDATE scan_jobs SET status = ?, expired_count = ?, message = ? WHERE id = ?",
-        ("已完成", expired, f"生成待执行裁决 {expired} 条", job_id),
-    )
-    return get_scan_job(conn, job_id)
+        online = conn.execute(
+            "SELECT id, domain_code, biz_date, storage_state FROM partitions "
+            "WHERE storage_state = '在线'"
+        ).fetchall()
+
+        for part in online:
+            policy = get_active_policy(conn, part["domain_code"])
+            if not policy:
+                continue
+            age = (as_of - _parse_day(part["biz_date"])).days
+            if age < int(policy["keep_days"]):
+                continue
+            # 同一分区若已有未完成裁决，不再重复开单（预留后续题：重裁/作废重开）
+            exists = conn.execute(
+                "SELECT id FROM judgments WHERE partition_id = ? "
+                "AND status IN ('待执行','执行中')",
+                (part["id"],),
+            ).fetchone()
+            if exists:
+                continue
+            conn.execute(
+                "INSERT INTO judgments "
+                "(scan_job_id, partition_id, domain_code, biz_date, policy_version, "
+                "keep_days, decided_action, status) "
+                "VALUES (?,?,?,?,?,?,?, '待执行')",
+                (
+                    job_id,
+                    part["id"],
+                    part["domain_code"],
+                    part["biz_date"],
+                    policy["version"],
+                    policy["keep_days"],
+                    policy["action_on_expire"],
+                ),
+            )
+            expired += 1
+
+        conn.execute(
+            "UPDATE scan_jobs SET status = ?, expired_count = ?, message = ? WHERE id = ?",
+            ("已完成", expired, f"生成待执行裁决 {expired} 条", job_id),
+        )
+        conn.commit()  # 提交在锁内：与影子轨/执行路径互斥
+        return get_scan_job(conn, job_id)
 
 
 def get_scan_job(conn: sqlite3.Connection, job_id: int) -> dict | None:

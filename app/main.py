@@ -9,14 +9,17 @@ from app.config import Config
 from app.db import get_db, init_db
 from app.services import (
     execute_judgment,
+    get_shadow_run,
     list_judgments,
     list_partitions,
     list_policies,
     list_reports,
     list_runs,
     list_scan_jobs,
+    list_shadow_runs,
     run_expire_scan,
     run_reconcile,
+    run_shadow_trial,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -178,3 +181,33 @@ async def api_reconcile(request: Request):
     with get_db() as conn:
         report = run_reconcile(conn, as_of)
     return {"ok": True, "report": report}
+
+
+@app.post("/api/shadow-runs")
+async def api_create_shadow_run(request: Request):
+    """影子试算：影子只读隔离，全链只写影子轨，正式分区不动。"""
+    require_user(request)
+    body = await request.json()
+    as_of = str(body.get("as_of_date", "")).strip()
+    if not as_of:
+        raise HTTPException(status_code=400, detail="缺少 as_of_date")
+    with get_db() as conn:
+        run = run_shadow_trial(conn, as_of)
+    return {"ok": True, "run": run}
+
+
+@app.get("/api/shadow-runs")
+def api_shadow_runs(request: Request):
+    require_user(request)
+    with get_db() as conn:
+        return {"items": list_shadow_runs(conn)}
+
+
+@app.get("/api/shadow-runs/{shadow_job_id}")
+def api_shadow_run_detail(request: Request, shadow_job_id: int):
+    require_user(request)
+    with get_db() as conn:
+        run = get_shadow_run(conn, shadow_job_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="影子试算不存在")
+    return run

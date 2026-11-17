@@ -30,6 +30,11 @@
     return `<span class="tag ${cls}">${state}</span>`;
   }
 
+  // 轨道标识：页面逐处标明影子或正式，两轨不混排
+  function trackTag(track) {
+    return `<span class="tag ${track === "影子" ? "info" : "ok"}">${track}</span>`;
+  }
+
   async function renderPolicies() {
     const data = await api("/api/policies");
     main.innerHTML = `
@@ -59,8 +64,8 @@
     const data = await api("/api/partitions");
     main.innerHTML = `
       <section class="panel">
-        <h2>实物分区</h2>
-        <p class="sub">在线 / 已归档 / 已销毁 / 裁撤中。数字与后续对账同源。</p>
+        <h2>实物分区 ${trackTag("正式")}</h2>
+        <p class="sub">正式轨 · 在线 / 已归档 / 已销毁 / 裁撤中。影子试算只改影子投影，本表一行不动。</p>
         <table>
           <thead><tr><th>主题域</th><th>业务日</th><th>行数</th><th>存储态</th><th>归档地址</th></tr></thead>
           <tbody>
@@ -90,9 +95,9 @@
         <button type="button" id="btn-scan">跑到期扫描</button>
       </div>
       <section class="panel">
-        <h2>扫描任务</h2>
+        <h2>扫描任务 ${trackTag("正式")}</h2>
         <table>
-          <thead><tr><th>编号</th><th>基准日</th><th>状态</th><th>到期数</th><th>说明</th></tr></thead>
+          <thead><tr><th>编号</th><th>轨道</th><th>基准日</th><th>状态</th><th>到期数</th><th>说明</th></tr></thead>
           <tbody>
             ${
               jobs.items.length
@@ -100,6 +105,7 @@
                     .map(
                       (j) => `<tr>
               <td>${j.id}</td>
+              <td>${trackTag("正式")}</td>
               <td class="mono">${j.as_of_date}</td>
               <td>${tag(j.status)}</td>
               <td>${j.expired_count}</td>
@@ -107,7 +113,7 @@
             </tr>`
                     )
                     .join("")
-                : `<tr><td colspan="5" class="empty">尚无扫描任务</td></tr>`
+                : `<tr><td colspan="6" class="empty">尚无扫描任务</td></tr>`
             }
           </tbody>
         </table>
@@ -126,8 +132,8 @@
     const data = await api("/api/judgments");
     main.innerHTML = `
       <section class="panel">
-        <h2>裁决清单</h2>
-        <p class="sub">待执行可点「执行」。执行结果写回分区存储态与执行流水。</p>
+        <h2>裁决清单 ${trackTag("正式")}</h2>
+        <p class="sub">正式轨 · 待执行可点「执行」。执行结果写回分区存储态与执行流水；影子试算不进本清单。</p>
         <table>
           <thead><tr><th>编号</th><th>主题域</th><th>业务日</th><th>策略</th><th>动作</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>
@@ -173,7 +179,7 @@
         <button type="button" id="btn-rec">生成对账报告</button>
       </div>
       <section class="panel">
-        <h2>对账报告</h2>
+        <h2>对账报告 ${trackTag("正式")}</h2>
         <table>
           <thead><tr><th>编号</th><th>基准日</th><th>在线</th><th>归档</th><th>销毁</th><th>待裁决</th><th>错位</th><th>摘要</th></tr></thead>
           <tbody>
@@ -208,12 +214,128 @@
     };
   }
 
+  async function renderShadow() {
+    const data = await api("/api/shadow-runs");
+    main.innerHTML = `
+      <div class="toolbar">
+        <label class="field">基准日
+          <input id="as-of-s" value="2026-11-16" />
+        </label>
+        <button type="button" id="btn-shadow">跑影子试算</button>
+      </div>
+      <section class="panel">
+        <h2>影子扫描台账 ${trackTag("影子")}</h2>
+        <p class="sub">影子只读隔离：试算快照正式分区后只写影子轨，正式分区、正式裁决、正式台账一律不动；串轨写即拦。</p>
+        <table>
+          <thead><tr><th>编号</th><th>轨道</th><th>基准日</th><th>状态</th><th>到期裁决</th><th>正式轨核验</th><th>摘要</th><th>操作</th></tr></thead>
+          <tbody>
+            ${
+              data.items.length
+                ? data.items
+                    .map(
+                      (j) => `<tr>
+              <td>${j.id}</td>
+              <td>${trackTag("影子")}</td>
+              <td class="mono">${j.as_of_date}</td>
+              <td>${tag(j.status)}</td>
+              <td>${j.expired_count}</td>
+              <td>${
+                j.prod_unchanged
+                  ? '<span class="tag ok">正式轨未动</span>'
+                  : '<span class="tag bad">串轨改动</span>'
+              }</td>
+              <td>${j.summary || j.message}</td>
+              <td><button type="button" class="secondary" data-shadow="${j.id}">对照</button></td>
+            </tr>`
+                    )
+                    .join("")
+                : `<tr><td colspan="8" class="empty">尚无影子试算，先跑一次</td></tr>`
+            }
+          </tbody>
+        </table>
+      </section>
+      <div id="shadow-detail"></div>`;
+    document.getElementById("btn-shadow").onclick = async () => {
+      const as_of_date = document.getElementById("as-of-s").value.trim();
+      await api("/api/shadow-runs", {
+        method: "POST",
+        body: JSON.stringify({ as_of_date }),
+      });
+      await renderShadow();
+    };
+    main.querySelectorAll("[data-shadow]").forEach((btn) => {
+      btn.onclick = () => renderShadowDetail(btn.dataset.shadow);
+    });
+  }
+
+  async function renderShadowDetail(id) {
+    const d = await api(`/api/shadow-runs/${id}`);
+    const runsByJudgment = {};
+    d.runs.forEach((r) => {
+      runsByJudgment[r.shadow_judgment_id] = r;
+    });
+    const ok = d.verify.recount_ok && d.verify.prod_unchanged;
+    document.getElementById("shadow-detail").innerHTML = `
+      <section class="panel">
+        <h2>影子裁决与执行结果 ${trackTag("影子")}</h2>
+        <p class="sub">试算 #${d.job.id} · 落库复核：${
+          ok
+            ? '<span class="tag ok">通过（重算一致，正式轨未动）</span>'
+            : '<span class="tag bad">异常</span>'
+        }</p>
+        <table>
+          <thead><tr><th>裁决号</th><th>主题域</th><th>业务日</th><th>策略</th><th>动作</th><th>影子结果</th><th>影子归档地址</th></tr></thead>
+          <tbody>
+            ${
+              d.judgments.length
+                ? d.judgments
+                    .map((j) => {
+                      const r = runsByJudgment[j.id] || {};
+                      return `<tr>
+              <td>${j.id}</td>
+              <td class="mono">${j.domain_code}</td>
+              <td class="mono">${j.biz_date}</td>
+              <td>v${j.policy_version} / ${j.keep_days}天</td>
+              <td>${j.decided_action}</td>
+              <td>${r.result_state ? tag(r.result_state) : "—"}</td>
+              <td class="mono">${r.archive_uri || "—"}</td>
+            </tr>`;
+                    })
+                    .join("")
+                : `<tr><td colspan="7" class="empty">本次试算无到期裁决</td></tr>`
+            }
+          </tbody>
+        </table>
+      </section>
+      <section class="panel">
+        <h2>影子分区投影 ${trackTag("影子")}</h2>
+        <p class="sub">试算时刻的正式分区快照 + 影子执行后的投影结果；正式分区队列保持原样。</p>
+        <table>
+          <thead><tr><th>主题域</th><th>业务日</th><th>行数</th><th>影子存储态</th><th>影子归档地址</th></tr></thead>
+          <tbody>
+            ${d.partitions
+              .map(
+                (p) => `<tr>
+              <td class="mono">${p.domain_code}</td>
+              <td class="mono">${p.biz_date}</td>
+              <td>${p.row_count}</td>
+              <td>${tag(p.storage_state)}</td>
+              <td class="mono">${p.archive_uri || "—"}</td>
+            </tr>`
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </section>`;
+  }
+
   const renderers = {
     policies: renderPolicies,
     partitions: renderPartitions,
     scan: renderScan,
     judgments: renderJudgments,
     reconcile: renderReconcile,
+    shadow: renderShadow,
   };
 
   async function show(name) {

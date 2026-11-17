@@ -102,6 +102,71 @@ CREATE TABLE IF NOT EXISTS reconcile_reports (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 影子轨：影子试算全链只写以下五表，正式轨六表一律不碰（串轨即拦）。
+CREATE TABLE IF NOT EXISTS shadow_scan_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  as_of_date TEXT NOT NULL,
+  status TEXT NOT NULL,
+  expired_count INTEGER NOT NULL DEFAULT 0,
+  message TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS shadow_partitions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  shadow_job_id INTEGER NOT NULL,
+  partition_id INTEGER NOT NULL,
+  domain_code TEXT NOT NULL,
+  biz_date TEXT NOT NULL,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  storage_state TEXT NOT NULL,
+  archive_uri TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(shadow_job_id, partition_id),
+  FOREIGN KEY(shadow_job_id) REFERENCES shadow_scan_jobs(id)
+);
+
+CREATE TABLE IF NOT EXISTS shadow_judgments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  shadow_job_id INTEGER NOT NULL,
+  partition_id INTEGER NOT NULL,
+  domain_code TEXT NOT NULL,
+  biz_date TEXT NOT NULL,
+  policy_version INTEGER NOT NULL,
+  keep_days INTEGER NOT NULL,
+  decided_action TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('待执行','执行中','已完成','已失败','已作废')),
+  fail_reason TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY(shadow_job_id) REFERENCES shadow_scan_jobs(id)
+);
+
+CREATE TABLE IF NOT EXISTS shadow_execute_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  shadow_judgment_id INTEGER NOT NULL UNIQUE,
+  action TEXT NOT NULL,
+  result_state TEXT NOT NULL,
+  archive_uri TEXT,
+  ok INTEGER NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY(shadow_judgment_id) REFERENCES shadow_judgments(id)
+);
+
+CREATE TABLE IF NOT EXISTS shadow_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  shadow_job_id INTEGER NOT NULL UNIQUE,
+  as_of_date TEXT NOT NULL,
+  online_count INTEGER NOT NULL,
+  archived_count INTEGER NOT NULL,
+  destroyed_count INTEGER NOT NULL,
+  judged_count INTEGER NOT NULL,
+  prod_unchanged INTEGER NOT NULL,
+  summary TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY(shadow_job_id) REFERENCES shadow_scan_jobs(id)
+);
+
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL

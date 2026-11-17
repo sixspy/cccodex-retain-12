@@ -176,6 +176,7 @@ th { color: var(--muted); font-weight: 550; }
 .tag.ok { color: var(--ok); border-color: #3d5a48; }
 .tag.warn { color: var(--warn); border-color: #5a4d2e; }
 .tag.bad { color: var(--bad); border-color: #5a3535; }
+.tag.info { color: var(--accent); border-color: #6b5232; }
 .empty { color: var(--muted); padding: 12px 0; }
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; }
